@@ -641,7 +641,7 @@ class Generator(nn.Module):
         truncation=1,
         truncation_latent=None,
     ):
-        
+
         if not input_is_latent:
             styles = self.style(noise)
         else:
@@ -679,8 +679,6 @@ class Generator(nn.Module):
             latent = styles.unsqueeze(1).repeat(1, inject_index, 1)
         else:
             latent = styles
-        # print("len(styles): ", len(styles[0]))
-        # print("latent: ", latent)
 
         features = []
         x = self.input(latent)

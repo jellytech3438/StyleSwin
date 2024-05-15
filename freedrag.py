@@ -7,90 +7,9 @@ from torchvision.transforms import functional as ttfunc
 import matplotlib.pyplot as plt
 
 
-def linear(feature, p0, p1, d, axis=0):
-    f0 = feature[..., p0[0], p0[1]]
-    f1 = feature[..., p1[0], p1[1]]
-    weight = abs(d[axis])
-    f = (1 - weight) * f0 + weight * f1
-    return f
-
-
-def bilinear(feature, qi, d):
-    y0, x0 = qi
-    dy, dx = d
-    d = (dx, dy)
-    dx = 1 if dx >= 0 else -1
-    dy = 1 if dy >= 0 else -1
-    x1 = x0 + dx
-    y1 = y0 + dy
-    fx1 = linear(feature, (x0, y0), (x1, y0), d, axis=0)
-    fx2 = linear(feature, (x0, y1), (x1, y1), d, axis=0)
-    weight = abs(d[1])
-    fx = (1 - weight) * fx1 + weight * fx2
-    return fx
-
-
-def motion_supervision(F0, F, pi, ti, r1=3, M=None, lambda_mask=20):
-    # print("M F size:", F.transpose(-1, -2).size())
-    # print("M F0 size:", F0.transpose(-1, -2).size())
-
-    # layer1: [1,1024,512] -> [1,512,1024] -> [1,512,32,32] -> [1,512,256,256]
-    # F = F.transpose(-1,-2).reshape(1,512,32,32)
-    # F0 = F0.transpose(-1,-2).reshape(1,512,32,32)
-
-    # layer2: [1,16384,256] -> [1,256,16384] -> [1,256,128,128] -> [1,256,256,256]
-    # F = F.transpose(-1,-2).reshape(1,256,128,128)
-    # F0 = F0.transpose(-1,-2).reshape(1,256,128,128)
-    #
-    # F = functional.interpolate(F, [256, 256], mode="bilinear")
-    # F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
-
-    # layer3: [1,65536,128] -> [1,128,65536] -> [1,128,256,256]
-    F = F.transpose(-1, -2).reshape(1, 128, 256, 256)
-    F0 = F0.transpose(-1, -2).reshape(1, 128, 256, 256)
-
-    dw, dh = ti[0] - pi[0], ti[1] - pi[1]
-    norm = math.sqrt(dw**2 + dh**2)
-    w = (max(0, pi[0] - r1), min(256, pi[0] + r1))
-    h = (max(0, pi[1] - r1), min(256, pi[1] + r1))
-    # d = di
-    d = torch.tensor(
-        (dw / norm, dh / norm),
-        dtype=F.dtype, device=F.device,
-    ).reshape(1, 1, 1, 2)
-    grid_h, grid_w = torch.meshgrid(
-        torch.tensor(range(h[0], h[1]), device=F.device),
-        torch.tensor(range(w[0], w[1]), device=F.device),
-        indexing='xy',
-    )
-    grid = torch.stack([grid_w, grid_h], dim=-1).unsqueeze(0)
-    grid = (grid / 255 - 0.5) * 2
-    grid_d = grid + 2 * d / 255
-
-    sample = functional.grid_sample(
-        F, grid, mode='bilinear', padding_mode='border',
-        align_corners=True,
-    )
-    sample_d = functional.grid_sample(
-        F, grid_d, mode='bilinear', padding_mode='border',
-        align_corners=True,
-    )
-
-    loss = (sample_d - sample.detach()).abs().mean(1).sum()
-
-    print(sample.shape, sample_d.shape, F.shape, F0.shape)
-
-    if M is not None:
-        # check if there's mask( min = 0 and max = 1 => have mask / min = 0 and max = 0 => no mask )
-        if M.min() == 0 and M.max() == 1:
-            mask = torch.from_numpy(M).float().to(
-                F.device).unsqueeze(0).unsqueeze(0)
-
-            loss += ((F * (1-mask)) - (F0 * (1-mask))
-                     ).abs().mean() * lambda_mask
-            # loss += ((F - F0) * (1 - mask)).abs().mean() * lambda_mask
-
-    return loss
+def requires_grad(model, flag=True):
+    for p in model.parameters():
+        p.requires_grad = flag
 
 
 def check_handle_reach_target(handle_points,
@@ -103,43 +22,7 @@ def check_handle_reach_target(handle_points,
     return (dist < 2.0).all()
 
 
-@torch.no_grad()
-def point_tracking(F0, F, pi, p0, r2=12):
-    # print("P F size:", F.transpose(-1, -2).size())
-    # print("P F0 size:", F0.transpose(-1, -2).size())
-
-    # layer1: [1,1024,512] -> [1,512,1024] -> [1,512,32,32] -> [1,512,256,256]
-    # F = F.transpose(-1,-2).reshape(1,512,32,32)
-    # F0 = F0.transpose(-1,-2).reshape(1,512,32,32)
-
-    # layer2: [1,16384,256] -> [1,256,16384] -> [1,256,128,128] -> [1,256,256,256]
-    # F = F.transpose(-1,-2).reshape(1,256,128,128)
-    # F0 = F0.transpose(-1,-2).reshape(1,256,128,128)
-    #
-    # F = functional.interpolate(F, [256, 256], mode="bilinear")
-    # F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
-
-    # layer3: [1,65536,128] -> [1,128,65536] -> [1,128,256,256]
-    F = F.transpose(-1, -2).reshape(1, 128, 256, 256)
-    F0 = F0.transpose(-1, -2).reshape(1, 128, 256, 256)
-
-    x = (max(0, pi[0] - r2), min(256, pi[0] + r2))
-    y = (max(0, pi[1] - r2), min(256, pi[1] + r2))
-    base = F0[..., p0[1], p0[0]].reshape(1, -1, 1, 1)
-    diff = (F[..., y[0]:y[1], x[0]:x[1]] - base).abs().mean(1)
-    idx = diff.argmin()
-    dy = int(idx / (x[1] - x[0]))
-    dx = int(idx % (x[1] - x[0]))
-    npi = (x[0] + dx, y[0] + dy)
-    return npi
-
-
-def requires_grad(model, flag=True):
-    for p in model.parameters():
-        p.requires_grad = flag
-
-
-class DragGAN():
+class FreeDrag():
     def __init__(self, device, layer_index=3):
         self.generator = Generator(256, 512, 8).to(device)
         requires_grad(self.generator, False)
@@ -266,59 +149,11 @@ class DragGAN():
         features = store_features[self.layer_index*2+1]
         # features = features[self.layer_index+1]
 
-
-        mask_upper = np.ones([256,256], np.float32)
-        mask_lower = np.ones([256,256], np.float32)
-        upper = 1
-        lower = 0
-
-        selection = upper
-        mask_area = 64
-        im_w, im_h = 256, 256
-
-        for i in range(3):
-            for j in range(1, 4):
-                if 2*i+j == 6:
-                    d = store_features[2*i+j].size(dim=1)
-                    d2 = store_features[2*i+j].size(dim=2)
-                    feature = store_features[2*i+j].transpose(-1, -2).reshape(
-                        1, d2, int(math.sqrt(d)), int(math.sqrt(d)))
-
-                    img = feature[0]
-                    img = torch.sum(img, 0)
-                    img = img / feature[0].shape[0]
-                    img = img.cpu().detach().numpy()
-                    break
-
-        for p in range(len(points)):
-            # only select start points
-            if p % 2 == 1:
-                continue
-            x = points[p][0]
-            y = points[p][1]
-            x_start, x_end = max(0, x - mask_area), min(im_w, x + mask_area)
-            y_start, y_end = max(0, y - mask_area), min(im_h, y + mask_area)
-            print(x,y,x_start,x_end,y_start,y_end)
-            for x in range(x_start, x_end):
-                for y in range(y_start, y_end):
-                    if selection == upper:
-                        if img[y,x] < 0:
-                            mask_upper[y,x] = 0
-                        else:
-                            mask_upper[y,x] = 1 - img[y,x]
-                    else:
-                        if img[y,x] > 0:
-                            mask_lower[y,x] = 0
-                        else:
-                            mask_lower[y,x] = img[y,x] + 1
-
-
-
         loss = 0
         for i in range(len(self.p0)):
             loss += motion_supervision((self.F0),
-                                       features, points[2*i], points[2*i+1], M=mask_upper, lambda_mask=self.lambda_mask)
-            
+                                       features, points[2*i], points[2*i+1], M=mask, lambda_mask=self.lambda_mask)
+
         # calculate with selection layer mask if user choose
 
         print(loss)
