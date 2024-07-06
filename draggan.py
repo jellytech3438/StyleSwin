@@ -5,7 +5,11 @@ from models.generator import Generator
 import torch.nn.functional as functional
 from torchvision.transforms import functional as ttfunc
 import matplotlib.pyplot as plt
-
+import cv2
+import lpips
+from einops import rearrange
+import torch.nn.functional as FUNC
+from dift_sd import SDFeaturizer
 
 def linear(feature, p0, p1, d, axis=0):
     f0 = feature[..., p0[0], p0[1]]
@@ -77,8 +81,6 @@ def motion_supervision(F0, F, pi, ti, r1=3, M=None, lambda_mask=20):
     )
 
     loss = (sample_d - sample.detach()).abs().mean(1).sum()
-
-    print(sample.shape, sample_d.shape, F.shape, F0.shape)
 
     if M is not None:
         # check if there's mask( min = 0 and max = 1 => have mask / min = 0 and max = 0 => no mask )
@@ -219,12 +221,10 @@ class DragGAN():
 
         for i in range(3):
             for j in range(1, 4):
-                # print("b4:", features[0].shape)
                 d = features[2*i+j].size(dim=1)
                 d2 = features[2*i+j].size(dim=2)
                 feature = features[2*i+j].transpose(-1, -2).reshape(
                     1, d2, int(math.sqrt(d)), int(math.sqrt(d)))
-                # print("af:", feature.shape)
 
                 img = feature[0]
                 img = torch.sum(img, 0)
@@ -267,57 +267,83 @@ class DragGAN():
         # features = features[self.layer_index+1]
 
 
-        mask_upper = np.ones([256,256], np.float32)
-        mask_lower = np.ones([256,256], np.float32)
-        upper = 1
-        lower = 0
+        # mask_upper = np.ones([256,256], np.float32)
+        # mask_lower = np.ones([256,256], np.float32)
+        # upper = 1
+        # lower = 0
+        #
+        # selection = upper
+        # mask_area = 64
+        # im_w, im_h = 256, 256
 
-        selection = upper
-        mask_area = 64
-        im_w, im_h = 256, 256
+        # feature map heat-map extracting
+        # for i in range(3):
+        #     for j in range(3):
+        #         if 2*i+j == 5:
+        #             d = store_features[2*i+j+1].size(dim=1)
+        #             d2 = store_features[2*i+j+1].size(dim=2)
+        #             feature = store_features[2*i+j+1].transpose(-1, -2).reshape(
+        #                 1, d2, int(math.sqrt(d)), int(math.sqrt(d)))
+        #
+        #             img = feature[0]
+        #             # this sum should change
+        #             img = torch.sum(img, 0)
+        #             img = img / feature[0].shape[0]
+        #             img = img.cpu().detach().numpy()
+        #             break
 
-        for i in range(3):
-            for j in range(1, 4):
-                if 2*i+j == 6:
-                    d = store_features[2*i+j].size(dim=1)
-                    d2 = store_features[2*i+j].size(dim=2)
-                    feature = store_features[2*i+j].transpose(-1, -2).reshape(
-                        1, d2, int(math.sqrt(d)), int(math.sqrt(d)))
 
-                    img = feature[0]
-                    img = torch.sum(img, 0)
-                    img = img / feature[0].shape[0]
-                    img = img.cpu().detach().numpy()
-                    break
+        #########
+        # temp_six = np.zeros((im_w, im_h))
+        #
+        # for i in range(im_h):
+        #     for j in range(im_w):
+        #         temp_six[i,j] = round((((img[i,j]+1) / 2) * 255), 0)
+        # temp_six = temp_six.astype('uint8')
+        # blur = cv2.GaussianBlur(temp_six,(5,5),0)
+        # ret3, thres3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+        #
+        # for i in range(im_h):
+        #     for j in range(im_w):
+        #         if thres3[i,j] == 255:
+        #             thres3[i,j] = 1
+        #         if selection == upper:
+        #             thres3[i,j] = 1 - thres3[i,j]
+        #
+        # mask = thres3
+        #########
 
-        for p in range(len(points)):
-            # only select start points
-            if p % 2 == 1:
-                continue
-            x = points[p][0]
-            y = points[p][1]
-            x_start, x_end = max(0, x - mask_area), min(im_w, x + mask_area)
-            y_start, y_end = max(0, y - mask_area), min(im_h, y + mask_area)
-            print(x,y,x_start,x_end,y_start,y_end)
-            for x in range(x_start, x_end):
-                for y in range(y_start, y_end):
-                    if selection == upper:
-                        if img[y,x] < 0:
-                            mask_upper[y,x] = 0
-                        else:
-                            mask_upper[y,x] = 1 - img[y,x]
-                    else:
-                        if img[y,x] > 0:
-                            mask_lower[y,x] = 0
-                        else:
-                            mask_lower[y,x] = img[y,x] + 1
 
+        # draw mask according to thresholding and selection layer
+        # this mask only masks a rectangle over the start points
+        
+        # for p in range(len(points)):
+        #     # only select start points
+        #     if p % 2 == 1:
+        #         continue
+        #     x = points[p][0]
+        #     y = points[p][1]
+        #     x_start, x_end = max(0, x - mask_area), min(im_w, x + mask_area)
+        #     y_start, y_end = max(0, y - mask_area), min(im_h, y + mask_area)
+        #     print(x,y,x_start,x_end,y_start,y_end)
+        #     for x in range(x_start, x_end):
+        #         for y in range(y_start, y_end):
+        #             if selection == upper:
+        #                 if img[y,x] < 0:
+        #                     mask_upper[y,x] = 0
+        #                 else:
+        #                     mask_upper[y,x] = 1 - img[y,x]
+        #             else:
+        #                 if img[y,x] > 0:
+        #                     mask_lower[y,x] = 0
+        #                 else:
+        #                     mask_lower[y,x] = img[y,x] + 1
 
 
         loss = 0
         for i in range(len(self.p0)):
             loss += motion_supervision((self.F0),
-                                       features, points[2*i], points[2*i+1], M=mask_upper, lambda_mask=self.lambda_mask)
+                                       features, points[2*i], points[2*i+1], M=None, lambda_mask=self.lambda_mask)
             
         # calculate with selection layer mask if user choose
 
@@ -354,3 +380,88 @@ class DragGAN():
 
         # return bool means keep iterating or not
         return status, (points, image), store_features, store_image
+
+
+    def preprocess_image(self, image):
+        image = image * 255
+        image = image.astype(np.uint8)
+        for i in range(len(image), -1, -1):
+            if i % 4 == 3:
+                image = np.delete(image, i)
+        print(image.shape)
+        image = image.reshape((256,256,3))
+        image = torch.from_numpy(image).float() / 127.5 - 1  # [-1, 1]
+        image = rearrange(image, "h w c -> 1 c h w")
+        image = image.to(self._device)
+        return image
+
+
+    def lpip_score(self,origin_image, raw_data):
+        all_lpips = []
+
+        source_image = self.preprocess_image(np.array(origin_image))
+        dragged_image = self.preprocess_image(np.array(raw_data))
+
+        # compute LPIP
+        loss_fn_alex = lpips.LPIPS(net='alex').to(self._device)
+        with torch.no_grad():
+            source_image_224x224 = FUNC.interpolate(
+                source_image, (224, 224), mode='bilinear')
+            dragged_image_224x224 = FUNC.interpolate(
+                dragged_image, (224, 224), mode='bilinear')
+            cur_lpips = loss_fn_alex(source_image_224x224, dragged_image_224x224)
+            all_lpips.append(cur_lpips.item())
+        return np.mean(all_lpips)
+
+
+    def mean_distance_score(self, origin_image, raw_data, points):
+        all_dist = []
+        handle_points = []
+        target_points = []
+        for idx, point in enumerate(points):
+            # from now on, the point is in row,col coordinate
+            cur_point = torch.tensor([point[1], point[0]])
+            if idx % 2 == 0:
+                handle_points.append(cur_point)
+            else:
+                target_points.append(cur_point)
+
+
+        dift = SDFeaturizer('stabilityai/stable-diffusion-2-1')
+                
+        source_image_tensor = self.preprocess_image(np.array(origin_image))
+        dragged_image_tensor = self.preprocess_image(np.array(raw_data))
+        print(source_image_tensor.shape, dragged_image_tensor.shape)
+
+        _, C, H, W = source_image_tensor.shape
+        ft_source = dift.forward(source_image_tensor,
+              prompt='',
+              t=261,
+              up_ft_index=1,
+              ensemble_size=8)
+        ft_source = FUNC.interpolate(ft_source, (H, W), mode='bilinear')
+
+        ft_dragged = dift.forward(dragged_image_tensor,
+              prompt='',
+              t=261,
+              up_ft_index=1,
+              ensemble_size=8)
+        ft_dragged = FUNC.interpolate(ft_dragged, (H, W), mode='bilinear')
+
+        cos = torch.nn.CosineSimilarity(dim=1)        
+        for pt_idx in range(len(handle_points)):
+            hp = handle_points[pt_idx]
+            tp = target_points[pt_idx]
+
+            num_channel = ft_source.size(1)
+            src_vec = ft_source[0, :, hp[0], hp[1]].view(1, num_channel, 1, 1)
+            cos_map = cos(src_vec, ft_dragged).cpu().numpy()[0]  # H, W
+            max_rc = np.unravel_index(cos_map.argmax(), cos_map.shape) # the matched row,col
+
+            # calculate distance
+            dist = (tp - torch.tensor(max_rc)).float().norm()
+            all_dist.append(dist)
+
+        return torch.tensor(all_dist).mean().item()
+
+
