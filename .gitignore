@@ -1,2 +1,6 @@
 __pycache__
 /ckpt/*
+/attention/*
+/points/*
+/features/*
+/200lambda_mask_seed512.png

@@ -1,6 +1,7 @@
 import dearpygui.dearpygui as dpg
 import numpy as np
 from draggan import DragGAN
+# from freedrag import DragGAN
 from array import array
 import threading
 import math
@@ -74,12 +75,20 @@ def set_lambda_mask(sender, app_data):
 def dragging_thread():
     global points, steps, dragging, mask
     while (dragging):
-        status, ret, sfeatures, simage = model.step(points, mask)
+        # if steps < 2:
+        #     status, ret, sfeatures, simage = model.step(
+        #         points, mask, steps, visiualize_attention=True)
+        # else:
+        #     status, ret, sfeatures, simage = model.step(
+        #         points, mask, steps, visiualize_attention=False)
+        status, ret, sfeatures, simage = model.step(
+            points, mask, steps, visiualize_attention=True)
         if status:
             points, image = ret
         else:
             dragging = False
-            return
+            print("reach target points")
+            break
         update_image(image)
         for i in range(len(points)):
             draw_point(*points[i], point_color[i % 2])
@@ -89,6 +98,10 @@ def dragging_thread():
         # if steps % 5 == 0:
         #     model.store_feature(steps, simage, sfeatures)
         dpg.set_value('steps', f'steps: {steps}')
+
+    # plot loss
+    model.plot_loss()
+    print("finish loss plot saving")
 
     # call calculate score function after dragging
     lpips = model.lpip_score(origin_image, raw_data)
@@ -376,6 +389,40 @@ with dpg.handler_registry(tag='drag_handler'):
 
 dpg.bind_item_handler_registry("image_data", "double_clicked_handler")
 # dpg.bind_item_handler_registry("imgae_data", "drag_handler")
+
+
+og_loss = []
+mask_loss = []
+
+
+def update_series():
+    og_loss_x = []
+    og_loss_y = []
+    mask_loss_y = []
+    mask_loss_x = []
+    for i in range(0, 500):
+        og_loss_y.append(i / 1000)
+        mask_loss_y.append(0.5 + 0.5 * math.cos(50 * i / 1000))
+    dpg.set_value('series_tag', [og_loss_y, mask_loss_y])
+    dpg.set_item_label('series_tag', "loss series through step")
+
+
+# with dpg.window(label="Loss plot", pos=(posx+256, posy), tag="loss"):
+#     # create plot
+#     with dpg.plot(label="Line Series", height=800, width=800):
+#         dpg.add_button(label="Update Series", callback=update_series)
+#
+#         # optionally create legend
+#         dpg.add_plot_legend()
+#
+#         # REQUIRED: create x and y axes
+#         dpg.add_plot_axis(dpg.mvXAxis, label="step")
+#         dpg.add_plot_axis(dpg.mvYAxis, label="loss", tag="loss_axis")
+#
+#         # series belong to a y axis
+#         dpg.add_line_series(og_loss, mask_loss,
+#                             label="loss series through step", parent="loss_axis")
+
 
 dpg.setup_dearpygui()
 dpg.show_viewport()
