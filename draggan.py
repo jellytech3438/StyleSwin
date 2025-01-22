@@ -10,6 +10,8 @@ import lpips
 from einops import rearrange
 import torch.nn.functional as FUNC
 from dift_sd import SDFeaturizer
+from PIL import Image
+from torchvision.transforms import PILToTensor
 
 
 def linear(feature, p0, p1, d, axis=0):
@@ -35,24 +37,34 @@ def bilinear(feature, qi, d):
     return fx
 
 
-def motion_supervision(F0, F, pi, ti, r1=3, M=None, lambda_mask=20):
+def motion_supervision(F0, F, pi, ti, layer_index, r1=3, M=None, lambda_mask=20):
     # print("M F size:", F.transpose(-1, -2).size())
     # print("M F0 size:", F0.transpose(-1, -2).size())
 
-    # layer1: [1,1024,512] -> [1,512,1024] -> [1,512,32,32] -> [1,512,256,256]
-    # F = F.transpose(-1,-2).reshape(1,512,32,32)
-    # F0 = F0.transpose(-1,-2).reshape(1,512,32,32)
+    if layer_index == 3:
+        # layer1: [1,1024,512] -> [1,512,1024] -> [1,512,32,32] -> [1,512,256,256]
+        F = F.transpose(-1,-2).reshape(1,512,32,32)
+        F0 = F0.transpose(-1,-2).reshape(1,512,32,32)
+        F = functional.interpolate(F, [256, 256], mode="bilinear")
+        F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
+    elif layer_index == 4:
+        # layer 4: [1,4096,512] -> [1,512,4096] -> [1,512,64,64] -> [1,512,256,256]
+        F = F.transpose(-1,-2).reshape(1,512,64,64)
+        F0 = F0.transpose(-1,-2).reshape(1,512,64,64)
+        
+        F = functional.interpolate(F, [256, 256], mode="bilinear")
+        F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
+    elif layer_index == 5:
+        # layer2: [1,16384,256] -> [1,256,16384] -> [1,256,128,128] -> [1,256,256,256]
+        F = F.transpose(-1,-2).reshape(1,256,128,128)
+        F0 = F0.transpose(-1,-2).reshape(1,256,128,128)
 
-    # layer2: [1,16384,256] -> [1,256,16384] -> [1,256,128,128] -> [1,256,256,256]
-    # F = F.transpose(-1,-2).reshape(1,256,128,128)
-    # F0 = F0.transpose(-1,-2).reshape(1,256,128,128)
-    #
-    # F = functional.interpolate(F, [256, 256], mode="bilinear")
-    # F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
-
-    # layer3: [1,65536,128] -> [1,128,65536] -> [1,128,256,256]
-    F = F.transpose(-1, -2).reshape(1, 128, 256, 256)
-    F0 = F0.transpose(-1, -2).reshape(1, 128, 256, 256)
+        F = functional.interpolate(F, [256, 256], mode="bilinear")
+        F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
+    elif layer_index >= 6:
+        # layer3: [1,65536,128] -> [1,128,65536] -> [1,128,256,256]
+        F = F.transpose(-1, -2).reshape(1, 128, 256, 256)
+        F0 = F0.transpose(-1, -2).reshape(1, 128, 256, 256)
 
     dw, dh = ti[0] - pi[0], ti[1] - pi[1]
     norm = math.sqrt(dw**2 + dh**2)
@@ -108,24 +120,35 @@ def check_handle_reach_target(handle_points,
 
 
 @torch.no_grad()
-def point_tracking(F0, F, pi, p0, r2=12):
+def point_tracking(F0, F, pi, p0, layer_index, r2=12):
     # print("P F size:", F.transpose(-1, -2).size())
     # print("P F0 size:", F0.transpose(-1, -2).size())
 
-    # layer1: [1,1024,512] -> [1,512,1024] -> [1,512,32,32] -> [1,512,256,256]
-    # F = F.transpose(-1,-2).reshape(1,512,32,32)
-    # F0 = F0.transpose(-1,-2).reshape(1,512,32,32)
+    if layer_index == 3:
+        # layer 3: [1,1024,512] -> [1,512,1024] -> [1,512,32,32] -> [1,512,256,256]
+        F = F.transpose(-1, -2).reshape(1, 512, 32, 32)
+        F0 = F0.transpose(-1, -2).reshape(1, 512, 32, 32)
+        
+        F = functional.interpolate(F, [256, 256], mode="bilinear")
+        F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
+    elif layer_index == 4:
+        # layer 4: [1, 4096, 512] -> [1, 512, 4096] -> [1, 512, 64, 64] -> [1, 512, 256, 256]
+        F = F.transpose(-1, -2).reshape(1, 512, 64, 64)
+        F0 = F0.transpose(-1, -2).reshape(1, 512, 64, 64)
+        
+        F = functional.interpolate(F, [256, 256], mode="bilinear")
+        F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
+    elif layer_index == 5:
+        # layer 5: [1, 16384, 256] -> [1, 256, 16384] -> [1, 256, 128, 128] -> [1, 256, 256, 256]
+        F = F.transpose(-1, -2).reshape(1, 256, 128, 128)
+        F0 = F0.transpose(-1, -2).reshape(1, 256, 128, 128)
 
-    # layer2: [1,16384,256] -> [1,256,16384] -> [1,256,128,128] -> [1,256,256,256]
-    # F = F.transpose(-1,-2).reshape(1,256,128,128)
-    # F0 = F0.transpose(-1,-2).reshape(1,256,128,128)
-    #
-    # F = functional.interpolate(F, [256, 256], mode="bilinear")
-    # F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
-
-    # layer3: [1,65536,128] -> [1,128,65536] -> [1,128,256,256]
-    F = F.transpose(-1, -2).reshape(1, 128, 256, 256)
-    F0 = F0.transpose(-1, -2).reshape(1, 128, 256, 256)
+        F = functional.interpolate(F, [256, 256], mode="bilinear")
+        F0 = functional.interpolate(F0, [256, 256], mode="bilinear")
+    elif layer_index >= 6:
+        # layer 6 7: [1, 65536, 128] -> [1, 128, 65536] -> [1, 128, 256, 256]
+        F = F.transpose(-1, -2).reshape(1, 128, 256, 256)
+        F0 = F0.transpose(-1, -2).reshape(1, 128, 256, 256)
 
     x = (max(0, pi[0] - r2), min(256, pi[0] + r2))
     y = (max(0, pi[1] - r2), min(256, pi[1] + r2))
@@ -144,11 +167,14 @@ def requires_grad(model, flag=True):
 
 
 class DragGAN():
-    def __init__(self, device, layer_index=3):
+    def __init__(self, device, train_fixed_layer=6, layer_index=7):
+        # layer index = 3~7 becuase of pt and ms interpolation
+        # train fixed index = 0~7
         self.generator = Generator(256, 512, 8).to(device)
         requires_grad(self.generator, False)
         self._device = device
         self.layer_index = layer_index
+        self.train_fixed_index = train_fixed_layer
         self.latent = None
         self.F0 = None
         self.optimizer = None
@@ -206,20 +232,20 @@ class DragGAN():
 
     @torch.no_grad()
     def generate_image(self, seed):
+        # np random
         # z = torch.from_numpy(
         #     np.random.RandomState(seed).randn(1, 512).astype(np.float32)
         # ).to(self._device)
+
+        # torch random
         gen = torch.Generator()
         gen = gen.manual_seed(seed)
         z = torch.randn(1, 512, generator=gen).to(self._device)
-        print("z: ", z.size())
+
         image, self.latent, self.F0, _ = self.generator(
             z, return_latents=True, return_features=True
         )
-        # v2
-        # imaeg = image[0]
-        # v1
-        image, self.F0 = image[0], self.F0[self.layer_index*2+1].detach()
+        image, self.F0 = image[0], self.F0[self.layer_index].detach()
         # OG
         # image, self.F0 = image[0], self.F0[self.layer_index+1].detach()
         image = (1/(2*2.8)) * \
@@ -258,69 +284,56 @@ class DragGAN():
         plt.imshow(img)
         plt.savefig("./features/{}.png".format(steps))
 
-    # overlay = [0, 1]
     # select_layer = [6, 7]
     # feature_channel = range(128)
-    def step(self, points, mask, step, overlay=None, select_layer=6, feature_channel=4, visiualize_attention=False):
+    def step(self, points, mask, step, feature_channel=4, visiualize_attention=False):
         if self.optimizer is None:
             len_pts = (len(points) // 2) * 2
             if len_pts == 0:
                 print('Select at least one pair of points')
                 return False, None
-            self.trainable = self.latent[:, :self.layer_index *
-                                         2-1, :].detach().requires_grad_(True)
-            self.fixed = self.latent[:, self.layer_index *
-                                     2-1:, :].detach().requires_grad_(False)
-            # self.trainable = self.latent[:, :self.layer_index, :].detach().requires_grad_(True)
-            # self.fixed = self.latent[:, self.layer_index:, :].detach().requires_grad_(False)
+            self.trainable = self.latent[:, :self.train_fixed_index, :].detach().requires_grad_(True)
+            self.fixed = self.latent[:, self.train_fixed_index:, :].detach().requires_grad_(False)
 
             self.optimizer = torch.optim.Adam([self.trainable], lr=2e-3)
             points = points[:len_pts]
             self.p0 = points[::2]
             print("p0: ", self.p0)
+            
         self.optimizer.zero_grad()
         trainable_fixed = torch.cat([self.trainable, self.fixed], dim=1)
+        
+
+        # init features and image for point tracking
         image, _, store_features, attentions = self.generator(
             trainable_fixed,  # this is why noise = [tensor[]]
             input_is_latent=True,
             return_features=True,
             return_attention=visiualize_attention,
-            mask1=torch.tensor(mask, dtype=torch.float).to("cuda")
+            mask1=torch.tensor(1-mask, dtype=torch.float).to("cuda")
         )
 
+        # v1 and OG
+        features = store_features[self.layer_index]
         # v2
-        # fetures = store_features
-        # v1
-        features = store_features[self.layer_index*2+1]
+        # features = store_features
+        
         new_points = points
-        # OG
-        # features = features[self.layer_index+1]
-
-        # pt start
-        # init features and image for point tracking
-        # image, _, features = self.generator(
-        #     trainable_fixed,
-        #     input_is_latent=True,
-        #     return_features=True
-        # )
-        # v2
-        # features = features
-        # v1
-        # features = features[self.layer_index*2+1]
-        # OG
-        # features = features[self.layer_index+1]
 
         store_image = (1/(2*2.8)) * \
             image[0].detach().cpu().permute(1, 2, 0).numpy() + 0.5
         image = store_image.clip(0, 1).reshape(-1)
+
+        # pt start
         for i in range(len(self.p0)):
             new_points[2*i] = point_tracking(self.F0,
-                                             features, points[2*i], self.p0[i])
+                                             features, points[2*i], self.p0[i], self.layer_index)
 
         loss = 0
+        # ms start
         for i in range(len(self.p0)):
             msloss, og_loss, mask_loss = motion_supervision((self.F0),
-                                                            features, points[2*i], points[2*i+1], M=mask, lambda_mask=self.lambda_mask)
+                                                            features, points[2*i], points[2*i+1], self.layer_index ,M=mask, lambda_mask=self.lambda_mask)
             loss += msloss
             self.og_loss_recod.append(og_loss)
             self.mask_loss_record.append(mask_loss)
@@ -374,86 +387,6 @@ class DragGAN():
                 plt.savefig(f"attention\\{step}.png")
             plt.close()
 
-        # calculate with selection layer mask if user choose
-        # start selection overlay
-        # there are eight layers in features layer of six and seven
-        # overlay:
-        #     choose from 1~8 to determine the thresholding one
-        # selection:
-        #     0 means lower and 1 means upper overlay
-
-        if overlay is not None:
-            # draw mask parameters
-            lower = 0
-            upper = 1
-            mask_area = 64
-            im_w, im_h = 256, 256
-
-            # feature map heat-map extracting
-            d = store_features[select_layer].size(dim=1)
-            d2 = store_features[select_layer].size(dim=2)
-            fts = store_features[select_layer].transpose(-1, -2).reshape(
-                1, d2, int(math.sqrt(d)), int(math.sqrt(d)))
-
-            img = fts[0]
-            temp = np.zeros((im_w, im_h))
-
-            # noramlization
-            temp = img[feature_channel] - img[feature_channel].min()
-            temp = temp / temp.max()
-            temp = temp * 255
-            temp = temp.data.cpu().numpy().astype(np.uint8)
-
-            blur = cv2.GaussianBlur(temp, (5, 5), 0)
-            mask = np.ones([256, 256], np.uint8)
-
-            # T = int(ret3)
-            # P = temp[points[0][1], points[0][0]]
-
-            # draw mask according to thresholding and selection layer
-            # this mask only masks a rectangle over the start points
-
-            for p in range(len(points)):
-                # only select start points
-                if p % 2 == 1:
-                    continue
-                x = points[p][0]
-                y = points[p][1]
-                x_start, x_end = max(
-                    0, x - mask_area), min(im_w, x + mask_area)
-                y_start, y_end = max(
-                    0, y - mask_area), min(im_h, y + mask_area)
-                area_blur = blur[y_start:y_end, x_start:x_end]
-                ret, thres = cv2.threshold(
-                    area_blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-                thres = thres / 255
-
-                if overlay == upper:
-                    mask[y_start:y_end, x_start:x_end] = 1 - thres
-                elif overlay == lower:
-                    mask[y_start:y_end, x_start:x_end] = thres
-
-            # for p in range(len(points)):
-            #     # only select start points
-            #     if p % 2 == 1:
-            #         continue
-            #     x = points[p][0]
-            #     y = points[p][1]
-            #     x_start, x_end = max(0, x - mask_area), min(im_w, x + mask_area)
-            #     y_start, y_end = max(0, y - mask_area), min(im_h, y + mask_area)
-            #     print(x,y,x_start,x_end,y_start,y_end)
-            #     for x in range(x_start, x_end):
-            #         for y in range(y_start, y_end):
-            #             if selection == upper:
-            #                 if img[y,x] < 0:
-            #                     mask_upper[y,x] = 0
-            #                 else:
-            #                     mask_upper[y,x] = 1 - img[y,x]
-            #             else:
-            #                 if img[y,x] > 0:
-            #                     mask_lower[y,x] = 0
-            #                 else:
-            #                     mask_lower[y,x] = img[y,x] + 1
 
         print(loss)
         loss.backward()
@@ -471,18 +404,16 @@ class DragGAN():
         if check_handle_reach_target(pi, ti):
             status = False
 
-        # return bool means keep iterating or not
+        # status means keep iterating or not
         return status, (points, image), store_features, store_image
 
     def preprocess_image(self, image):
         image = image * 255
         image = image.astype(np.uint8)
-        for i in range(len(image), -1, -1):
-            if i % 4 == 3:
-                image = np.delete(image, i)
-        print(image.shape)
-        image = image.reshape((256, 256, 3))
-        image = torch.from_numpy(image).float() / 127.5 - 1  # [-1, 1]
+        image = Image.fromarray(image.reshape((256, 256, 4)))
+        image = image.convert('RGB')
+        image = torch.from_numpy(
+            np.array(image)).float() / 127.5 - 1  # [-1, 1]
         image = rearrange(image, "h w c -> 1 c h w")
         image = image.to(self._device)
         return image
@@ -519,11 +450,25 @@ class DragGAN():
 
         dift = SDFeaturizer('stabilityai/stable-diffusion-2-1')
 
-        source_image_tensor = self.preprocess_image(np.array(origin_image))
-        dragged_image_tensor = self.preprocess_image(np.array(raw_data))
-        print(source_image_tensor.shape, dragged_image_tensor.shape)
+        # source_image_tensor = self.preprocess_image(np.array(origin_image))
+        # dragged_image_tensor = self.preprocess_image(np.array(raw_data))
+        # print(source_image_tensor.shape, dragged_image_tensor.shape)
 
-        _, C, H, W = source_image_tensor.shape
+        source_image = np.array(origin_image) * 255
+        source_image = source_image.astype(np.uint8)
+        source_image = Image.fromarray(source_image.reshape((256, 256, 4)))
+        source_image = source_image.convert('RGB')
+        source_image_tensor = (PILToTensor()(
+            source_image) / 255.0 - 0.5) * 2
+
+        dragged_image = np.array(raw_data) * 255
+        dragged_image = dragged_image.astype(np.uint8)
+        dragged_image = Image.fromarray(dragged_image.reshape((256, 256, 4)))
+        dragged_image = dragged_image.convert('RGB')
+        dragged_image_tensor = (PILToTensor()(
+            dragged_image) / 255.0 - 0.5) * 2
+
+        _, H, W = source_image_tensor.shape
         ft_source = dift.forward(source_image_tensor,
                                  prompt='',
                                  t=261,

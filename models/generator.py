@@ -110,72 +110,6 @@ def window_reverse(windows, window_size, H, W):
     return x
 
 
-# RoPE functions
-
-def init_t_xy(end_x: int, end_y: int, zero_center=False):
-    t = torch.arange(end_x * end_y, dtype=torch.float32)
-    t_x = (t % end_x).float()
-    t_y = torch.div(t, end_x, rounding_mode='floor').float()
-
-    return t_x, t_y
-
-
-def init_random_2d_freqs(head_dim: int, num_heads: int, theta: float = 10.0, rotate: bool = True):
-    freqs_x = []
-    freqs_y = []
-    theta = theta
-    mag = 1 / (theta ** (torch.arange(0, head_dim, 4)
-               [: (head_dim // 4)].float() / head_dim))
-    for i in range(num_heads):
-        angles = torch.rand(1) * 2 * torch.pi if rotate else torch.zeros(1)
-        fx = torch.cat([mag * torch.cos(angles), mag *
-                       torch.cos(torch.pi/2 + angles)], dim=-1)
-        fy = torch.cat([mag * torch.sin(angles), mag *
-                       torch.sin(torch.pi/2 + angles)], dim=-1)
-        freqs_x.append(fx)
-        freqs_y.append(fy)
-    freqs_x = torch.stack(freqs_x, dim=0)
-    freqs_y = torch.stack(freqs_y, dim=0)
-    freqs = torch.stack([freqs_x, freqs_y], dim=0)
-    return freqs
-
-
-def compute_cis(freqs, t_x, t_y):
-    N = t_x.shape[0]
-    # No float 16 for this range
-    with torch.cuda.amp.autocast(enabled=False):
-        freqs_cis = []
-        freqs_x = (t_x.unsqueeze(-1) @ freqs[0].unsqueeze(-2))
-        freqs_y = (t_y.unsqueeze(-1) @ freqs[1].unsqueeze(-2))
-        freqs_cis.append(torch.polar(
-            torch.ones_like(freqs_x), freqs_x + freqs_y))
-
-    return torch.cat(freqs_cis, dim=-1)
-
-
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    ndim = x.ndim
-    assert 0 <= 1 < ndim
-    # assert freqs_cis.shape == (x.shape[-2], x.shape[-1])
-    if freqs_cis.shape == (x.shape[-2], x.shape[-1]):
-        shape = [d if i >= ndim-2 else 1 for i, d in enumerate(x.shape)]
-    elif freqs_cis.shape == (x.shape[-3], x.shape[-2], x.shape[-1]):
-        shape = [d if i >= ndim-3 else 1 for i, d in enumerate(x.shape)]
-
-
-def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)
-
-
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
     It supports both of shifted and non-shifted window.
@@ -194,48 +128,10 @@ class WindowAttention(nn.Module):
         super().__init__()
         self.dim = dim
         self.window_size = window_size  # Wh, Ww
-        # v2
-        # self.pretrained_window_size = pretrained_window_size
-        ###
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.head_dim = head_dim
         self.scale = qk_scale or head_dim ** -0.5
-
-        # v2
-        # self.logit_scale = nn.Parameter(
-        #     torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True)
-        ###
-
-        # v2
-        # mlp to generate continuous relative position bias
-        # self.cpb_mlp = nn.Sequential(nn.Linear(2, 512, bias=True),
-        #                              nn.ReLU(inplace=True),
-        #                              nn.Linear(512, num_heads, bias=False))
-        #
-        # # get relative_coords_table
-        # relative_coords_h = torch.arange(
-        #     -(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
-        # relative_coords_w = torch.arange(
-        #     -(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
-        # relative_coords_table = torch.stack(
-        #     torch.meshgrid([relative_coords_h,
-        #                     # 1, 2*Wh-1, 2*Ww-1, 2
-        #                     relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)
-        # if pretrained_window_size[0] > 0:
-        #     relative_coords_table[:, :, :,
-        #                           0] /= (pretrained_window_size[0] - 1)
-        #     relative_coords_table[:, :, :,
-        #                           1] /= (pretrained_window_size[1] - 1)
-        # else:
-        #     relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
-        #     relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
-        # relative_coords_table *= 8  # normalize to -8, 8
-        # relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
-        #     torch.abs(relative_coords_table) + 1.0) / np.log2(8)
-        #
-        # self.register_buffer("relative_coords_table", relative_coords_table)
-        ###
 
         # define a parameter table of relative position bias
         # in swin-t there's no use
@@ -265,11 +161,6 @@ class WindowAttention(nn.Module):
 
         self.softmax = nn.Softmax(dim=-1)
 
-        # v2
-        # self.proj = nn.Linear(dim, dim)
-        # self.proj_drop = nn.Dropout(proj_drop)
-        ###
-
     def forward(self, q, k, v, mask=None):
         """
         Args:
@@ -288,40 +179,17 @@ class WindowAttention(nn.Module):
 
         q = q * self.scale
 
-        # v1
         attn = (q @ k.transpose(-2, -1))
-        # v2
-        # cosine attention
-        # attn = (F.normalize(q, dim=-1) @
-        #         F.normalize(k, dim=-1).transpose(-2, -1))
-        # logit_scale = torch.clamp(
-        #     self.logit_scale, max=torch.log(torch.tensor(1. / 0.01).to("cuda"))).exp()
-        # attn = attn * logit_scale
-        ###
 
-        # v2
-        # relative_position_bias_table = self.cpb_mlp(
-        #     self.relative_coords_table).view(-1, self.num_heads)
-        ###
-
-        # v1
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             # Wh*Ww,Wh*Ww,nH
             self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)
-        # v2
-        # relative_position_bias = relative_position_bias_table[self.relative_position_index.view(-1)].view(
-        #     # Wh*Ww,Wh*Ww,nH
-        #     self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
             nW = mask.shape[0]
-            # print("input mask: ", mask.size())
-            # print("reshape mask: ", mask.unsqueeze(1).unsqueeze(0).size())
-            # print("attention: ", attn.view(
-            #     B_ // nW, nW, self.num_heads, N, N).size())
             attn = attn.view(B_ // nW, nW, self.num_heads, N,
                              N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
@@ -331,11 +199,6 @@ class WindowAttention(nn.Module):
 
         attn = self.attn_drop(attn)
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
-        # v2
-        # x = self.proj(x)
-        # x = self.proj_drop(x)
-        ###
-
         return x, attn
 
     def extra_repr(self) -> str:
@@ -475,16 +338,18 @@ class StyleSwinTransformerBlock(nn.Module):
         q1_windows, k1_windows, v1_windows = self.get_window_qkv(qkv_1)
         q2_windows, k2_windows, v2_windows = self.get_window_qkv(qkv_2)
 
+        # attention mask from user mask
         if mask1 is not None:
-            mask1 = mask1.unsqueeze(0).unsqueeze(-1)
+            mask1 = mask1.unsqueeze(0).unsqueeze(0)
+            mask1 = F.interpolate(mask1, (H, W), mode='bilinear')
+            mask1 = mask1.squeeze(0).unsqueeze(-1)
             window_mask1 = window_partition(mask1, self.window_size)
             window_mask1 = window_mask1.view(-1,
                                              self.window_size * self.window_size)
             attn_mask1 = window_mask1.unsqueeze(1) - window_mask1.unsqueeze(2)
             attn_mask1 = attn_mask1.masked_fill(
                 attn_mask1 != 0, float(-100.0)).masked_fill(attn_mask1 == 0, float(0.0))
-            self.mask1 = attn_mask1
-            print(attn_mask1)
+            self.attn_mask1 = attn_mask1
 
         x1, attn1 = self.attn[0](
             q1_windows, k1_windows, v1_windows, self.attn_mask1)
@@ -510,15 +375,6 @@ class StyleSwinTransformerBlock(nn.Module):
         x = shortcut + x
         x = x + self.mlp(self.norm2(x.transpose(-1, -2),
                          style).transpose(-1, -2))
-
-        # v2
-        # x = shortcut + \
-        #     self.drop_path(self.norm1(
-        #         x.transpose(-1, -2), style).transpose(-1, -2))
-        # x = x + \
-        #     self.drop_path(self.norm2(
-        #         self.mlp(x).transpose(-1, -2), style).transpose(-1, -2))
-        ###
 
         if return_attn:
             return x, attn1, attn2
@@ -834,22 +690,6 @@ class Generator(nn.Module):
 
             styles = torch.cat(style_t, dim=0)
 
-        # if len(styles) < 2:
-        #     inject_index = self.n_latent
-        #
-        #     if styles[0].ndim < 3:
-        #         latent = styles[0].unsqueeze(1).repeat(1, inject_index, 1)
-        #     else:
-        #         latent = styles[0]
-        # else:
-        #     if inject_index is None:
-        #         inject_index = random.randint(1, self.n_latent - 1)
-        #
-        #     latent = styles[0].unsqueeze(1).repeat(1, inject_index, 1)
-        #     latent2 = styles[1].unsqueeze(1).repeat(1, self.n_latent - inject_index, 1)
-        #
-        #     latent = torch.cat([latent, latent2], dim=1)
-
         if styles.ndim < 3:
             latent = styles.unsqueeze(1).repeat(1, inject_index, 1)
         else:
@@ -866,14 +706,12 @@ class Generator(nn.Module):
         count = 0
         skip = None
         for layer, to_rgb in zip(self.layers, self.to_rgbs):
-            if return_attention:
-                x, attn = layer(
-                    x, latent[:, count, :], latent[:, count+1, :], return_attn=True, mask1=mask1)
+            x, attn = layer(
+                x, latent[:, count, :], latent[:, count+1, :], return_attn=return_attention, mask1=mask1)
 
+            if return_attention:
                 attention.append(attn)
-            else:
-                x, _ = layer(
-                    x, latent[:, count, :], latent[:, count+1, :], return_attn=False)
+
             if return_features:
                 features.append(x)
 

@@ -25,12 +25,14 @@ image_pixels = image_height * image_width
 raw_data_size = image_width * image_height * rgba_channel
 raw_data = array('f', [1] * raw_data_size)
 origin_image = array('f', [1] * raw_data_size)
+store_image = array('f', [1] * raw_data_size)
 device = "cuda"
+store_feat_step = 5
 
 model = DragGAN(device)
 
 dpg.create_context()
-dpg.create_viewport(title='DragSwin', width=1600, height=1600)
+dpg.create_viewport(title='mm-final', width=1600, height=1600)
 
 with dpg.texture_registry(show=False):
     dpg.add_raw_texture(
@@ -44,6 +46,14 @@ def update_image(new_image):
     for i in range(0, image_pixels):
         rd_base, im_base = i * rgba_channel, i * rgb_channel
         raw_data[rd_base:rd_base + rgb_channel] = array(
+            'f', new_image[im_base:im_base + rgb_channel]
+        )
+
+
+def update_save_image(new_image):
+    for i in range(0, image_pixels):
+        rd_base, im_base = i * rgba_channel, i * rgb_channel
+        store_image[rd_base:rd_base + rgb_channel] = array(
             'f', new_image[im_base:im_base + rgb_channel]
         )
 
@@ -73,16 +83,10 @@ def set_lambda_mask(sender, app_data):
 
 
 def dragging_thread():
-    global points, steps, dragging, mask
+    global points, steps, dragging, mask, plot_loss, store_image
     while (dragging):
-        # if steps < 2:
-        #     status, ret, sfeatures, simage = model.step(
-        #         points, mask, steps, visiualize_attention=True)
-        # else:
-        #     status, ret, sfeatures, simage = model.step(
-        #         points, mask, steps, visiualize_attention=False)
         status, ret, sfeatures, simage = model.step(
-            points, mask, steps, visiualize_attention=True)
+            points, mask, steps, visiualize_attention=dpg.get_value("vis attention"))
         if status:
             points, image = ret
         else:
@@ -90,18 +94,20 @@ def dragging_thread():
             print("reach target points")
             break
         update_image(image)
+        update_save_image(image)
         for i in range(len(points)):
             draw_point(*points[i], point_color[i % 2])
         steps += 1
 
-        # store features map into features folder every 5 steps
-        # if steps % 5 == 0:
-        #     model.store_feature(steps, simage, sfeatures)
+        # store features map into features folder every n steps
+        if dpg.get_value("store feature") and steps % store_feat_step == 0:
+            model.store_feature(steps, simage, sfeatures)
         dpg.set_value('steps', f'steps: {steps}')
 
     # plot loss
-    model.plot_loss()
-    print("finish loss plot saving")
+    if dpg.get_value("plot loss"):
+        model.plot_loss()
+        print("saves loss ploting")
 
     # call calculate score function after dragging
     lpips = model.lpip_score(origin_image, raw_data)
@@ -184,6 +190,12 @@ with dpg.window(
     dpg.add_button(label="generate", pos=(70, 120), callback=generate_image)
     dpg.add_text('image', pos=(5, 140))
     dpg.add_button(label="select image", pos=(70, 140), callback=None)
+    dpg.add_checkbox(label='store feature', tag='store feature',
+                     pos=(70, 160), default_value=False)
+    dpg.add_checkbox(label='plot loss', tag='plot loss',
+                     pos=(70, 180), default_value=False)
+    dpg.add_checkbox(label='vis attention', tag='vis attention',
+                     pos=(70, 200), default_value=False)
 
 posy += height + 2
 with dpg.window(
@@ -212,7 +224,12 @@ with dpg.window(
 
     def reset_mask():
         global mask
-        mask = np.fill(1)
+        for y in range(256):
+            for x in range(256):
+                if mask[y, x] == 0:
+                    mask[y, x] = 1
+                    raw_data[256*y*rgba_channel + x*rgba_channel] = 0.
+        # print(np.count_nonzero(mask))
 
     def print_mask():
         global mask
@@ -249,8 +266,10 @@ posy += height + 2
 
 
 def save_image(sender, app_data):
-    global raw_data, image_width, image_height
-    temp = np.array(raw_data) * 255
+    global store_image, raw_data, origin_image, image_width, image_height
+    temp = np.array(origin_image) * 255
+    # temp = np.array(store_image) * 255
+    # temp = np.array(raw_data) * 255
     im = Image.fromarray(temp.astype(
         np.uint8).reshape((height, width, 4)))
     im.save("imgs/"+dpg.get_value("save image name")+'.png',)
@@ -264,6 +283,12 @@ def save_points(sender, app_data):
         return 0
     np.save("points/latest_points", np.array(points))
     print("save points successfully")
+
+
+def save_mask(sender, app_data):
+    global mask
+    np.save("mask/latest_mask", np.array(mask))
+    print("save mask successfully")
 
 
 with dpg.window(
@@ -308,6 +333,35 @@ with dpg.window(
     dpg.add_button(
         label="load points", width=100, callback=lambda: dpg.show_item("points selector"),
         pos=(70, 80),
+    )
+
+    dpg.add_text('mask', pos=(5, 100))
+    dpg.add_button(
+        label="save mask", width=100, pos=(70, 100), callback=save_mask
+    )
+
+    def select_mask(sender, app_data):
+        selections = app_data['selections']
+        if selections:
+            for fn in selections:
+                global mask
+                select_mask = np.load(selections[fn]).tolist()
+                mask = np.array(select_mask)
+                print(mask.shape)
+                print("load mask successfully")
+                break
+
+    def cancel_mask(sender, app_data):
+        ...
+
+    with dpg.file_dialog(
+        directory_selector=False, show=False, callback=select_mask, id='mask selector',
+        cancel_callback=cancel_pt, width=700, height=400
+    ):
+        dpg.add_file_extension('.*')
+    dpg.add_button(
+        label="load mask", width=100, callback=lambda: dpg.show_item("mask selector"),
+        pos=(70, 120),
     )
 
 
@@ -427,10 +481,4 @@ def update_series():
 dpg.setup_dearpygui()
 dpg.show_viewport()
 dpg.start_dearpygui()
-# while dpg.is_dearpygui_running():
-#     dpg.set_item_width("Image Win", image_size)
-#     dpg.set_item_height("Image Win", image_size)
-#
-#     dpg.render_dearpygui_frame()
-
 dpg.destroy_context()

@@ -25,7 +25,7 @@ import time
 
 from dataset.dataset import MultiResolutionDataset
 from models.discriminator import Discriminator
-from models.generator import Generator
+from models.generatorv2 import Generator
 from utils import fid_score
 from utils.CRDiffAug import CR_DiffAug
 from utils.distributed import get_rank, reduce_loss_dict, synchronize
@@ -60,7 +60,8 @@ def sample_data(loader):
 
 
 def d_logistic_loss(real_pred, fake_pred):
-    assert type(real_pred) == type(fake_pred), "real_pred must be the same type as fake_pred"
+    assert type(real_pred) == type(
+        fake_pred), "real_pred must be the same type as fake_pred"
     real_loss = F.softplus(-real_pred)
     fake_loss = F.softplus(fake_pred)
     return real_loss.mean() + fake_loss.mean()
@@ -70,7 +71,8 @@ def d_r1_loss(real_pred, real_img):
     grad_real, = autograd.grad(
         outputs=real_pred.sum(), inputs=real_img, create_graph=True
     )
-    grad_penalty = grad_real.pow(2).reshape(grad_real.shape[0], -1).sum(1).mean()
+    grad_penalty = grad_real.pow(2).reshape(
+        grad_real.shape[0], -1).sum(1).mean()
     return grad_penalty
 
 
@@ -88,10 +90,11 @@ def set_grad_none(model, targets):
 def tensor_transform_reverse(image):
     assert image.dim() == 4
     moco_input = torch.zeros(image.size()).type_as(image)
-    moco_input[:,0,:,:] = image[:,0,:,:] * 0.229 + 0.485
-    moco_input[:,1,:,:] = image[:,1,:,:] * 0.224 + 0.456
-    moco_input[:,2,:,:] = image[:,2,:,:] * 0.225 + 0.406
+    moco_input[:, 0, :, :] = image[:, 0, :, :] * 0.229 + 0.485
+    moco_input[:, 1, :, :] = image[:, 1, :, :] * 0.224 + 0.456
+    moco_input[:, 2, :, :] = image[:, 2, :, :] * 0.225 + 0.406
     return moco_input
+
 
 def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device):
     if get_rank() == 0 and args.tf_log:
@@ -141,11 +144,11 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         requires_grad(discriminator, True)
         noise = torch.randn((args.batch, 512)).cuda()
 
-        fake_img, _ = generator(noise)
+        fake_img, _, _ = generator(noise, input_is_latent=True)
         fake_pred = discriminator(fake_img)
         real_pred = discriminator(real_img)
         d_loss = d_logistic_loss(real_pred, fake_pred) * args.gan_weight
-        
+
         if args.bcr:
             real_img_cr_aug = CR_DiffAug(real_img)
             fake_img_cr_aug = CR_DiffAug(fake_img)
@@ -169,7 +172,8 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             r1_loss = d_r1_loss(real_pred, real_img)
 
             discriminator.zero_grad()
-            (args.gan_weight * (args.r1 / 2 * r1_loss * args.d_reg_every + 0 * real_pred[0])).backward()
+            (args.gan_weight * (args.r1 / 2 * r1_loss *
+             args.d_reg_every + 0 * real_pred[0])).backward()
 
             d_optim.step()
 
@@ -187,9 +191,9 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             real_img = real_img.to(device)
 
         noise = torch.randn((args.batch, 512)).cuda()
-        fake_img, _ = generator(noise)
+        fake_img, _, _ = generator(noise, input_is_latent=True)
         fake_pred = discriminator(fake_img)
-        g_loss = g_nonsaturating_loss(fake_pred)* args.gan_weight
+        g_loss = g_nonsaturating_loss(fake_pred) * args.gan_weight
 
         loss_dict["g"] = g_loss
         generator.zero_grad()
@@ -206,8 +210,9 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         if args.lr_decay and i > args.lr_decay_start_steps:
             args.G_lr -= lr_decay_per_step
-            args.D_lr = args.G_lr * 4 if args.ttur else (args.D_lr - lr_decay_per_step)
-        
+            args.D_lr = args.G_lr * \
+                4 if args.ttur else (args.D_lr - lr_decay_per_step)
+
             for param_group in d_optim.param_groups:
                 param_group['lr'] = args.D_lr
             for param_group in g_optim.param_groups:
@@ -220,17 +225,20 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                     'd_loss': d_loss_val,
                     'g_loss': g_loss_val,
                     'r1_val': r1_val,
-                    }
+                }
                 if wandb and args.wandb:
                     wandb.log(vis_loss, step=i)
                 iters_time = time.time() - end
                 end = time.time()
                 if args.lr_decay:
-                    print("Iters: {}\tTime: {:.4f}\tD_loss: {:.4f}\tG_loss: {:.4f}\tR1: {:.4f}\tG_lr: {:e}\tD_lr: {:e}".format(i, iters_time, d_loss_val, g_loss_val, r1_val, args.G_lr, args.D_lr))
+                    print("Iters: {}\tTime: {:.4f}\tD_loss: {:.4f}\tG_loss: {:.4f}\tR1: {:.4f}\tG_lr: {:e}\tD_lr: {:e}".format(
+                        i, iters_time, d_loss_val, g_loss_val, r1_val, args.G_lr, args.D_lr))
                 else:
-                    print("Iters: {}\tTime: {:.4f}\tD_loss: {:.4f}\tG_loss: {:.4f}\tR1: {:.4f}".format(i, iters_time, d_loss_val, g_loss_val, r1_val))
+                    print("Iters: {}\tTime: {:.4f}\tD_loss: {:.4f}\tG_loss: {:.4f}\tR1: {:.4f}".format(
+                        i, iters_time, d_loss_val, g_loss_val, r1_val))
                 if args.tf_log:
-                    vis.plot_dict(vis_loss, step=(i * args.batch * int(os.environ["WORLD_SIZE"])))
+                    vis.plot_dict(vis_loss, step=(
+                        i * args.batch * int(os.environ["WORLD_SIZE"])))
 
             if i != 0 and i % args.eval_freq == 0:
                 torch.save(
@@ -244,15 +252,17 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                     },
                     args.checkpoint_path + f"/{str(i).zfill(6)}.pt",
                 )
-                
+
                 print("=> Evaluation ...")
                 g_ema.eval()
-                fid1 = evaluation(g_ema, args, i * args.batch * int(os.environ["WORLD_SIZE"]))
+                fid1 = evaluation(g_ema, args, i * args.batch *
+                                  int(os.environ["WORLD_SIZE"]))
                 fid_dict = {'fid1': fid1}
                 if wandb and args.wandb:
                     wandb.log({'fid': fid1}, step=i)
                 if args.tf_log:
-                    vis.plot_dict(fid_dict, step=(i * args.batch * int(os.environ["WORLD_SIZE"])))
+                    vis.plot_dict(fid_dict, step=(
+                        i * args.batch * int(os.environ["WORLD_SIZE"])))
 
             if i % args.save_freq == 0:
                 torch.save(
@@ -275,7 +285,7 @@ def evaluation(generator, args, steps):
         with torch.no_grad():
             noise = torch.randn((args.val_batch_size, 512)).cuda()
 
-            out_sample, _ = generator(noise)
+            out_sample, _, _ = generator(noise, input_is_latent=True)
             out_sample = tensor_transform_reverse(out_sample)
 
             if not os.path.exists(os.path.join(args.sample_path, "eval_{}".format(str(steps)))):
@@ -290,10 +300,11 @@ def evaluation(generator, args, steps):
                     nrow=1,
                     padding=0,
                     normalize=True,
-                    range=(0, 1),
+                    # range=(0, 1),
+                    value_range=(0, 1),
                 )
                 cnt += 1
-    
+
     gt_path = args.eval_gt_path
     device = torch.device('cuda:0')
     fid = fid_score.calculate_fid_given_paths([os.path.join(args.sample_path, "eval_{}".format(
@@ -309,7 +320,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--path", type=str, default=None, help="Path of training data")
+    parser.add_argument("--path", type=str, default=None,
+                        help="Path of training data")
     parser.add_argument("--iter", type=int, default=800000)
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--size", type=int, default=256)
@@ -321,41 +333,69 @@ if __name__ == "__main__":
     parser.add_argument("--D_lr", type=float, default=0.0002)
     parser.add_argument("--beta1", type=float, default=0.0)
     parser.add_argument("--beta2", type=float, default=0.99)
-    parser.add_argument("--start_dim", type=int, default=512, help="Start dim of generator input dim")
+    parser.add_argument("--start_dim", type=int, default=512,
+                        help="Start dim of generator input dim")
     parser.add_argument("--D_channel_multiplier", type=int, default=2)
     parser.add_argument("--G_channel_multiplier", type=int, default=1)
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--print_freq", type=int, default=1000)
     parser.add_argument("--save_freq", type=int, default=20000)
     parser.add_argument("--eval_freq", type=int, default=50000)
-    parser.add_argument('--workers', default=8, type=int, help='Number of workers')
+    parser.add_argument('--workers', default=0, type=int,
+                        help='Number of workers')
 
-    parser.add_argument('--checkpoint_path', default='/tmp', type=str, help='Save checkpoints')
-    parser.add_argument('--sample_path', default='/tmp', type=str, help='Save sample')
-    parser.add_argument('--start_iter', default=0, type=int, help='Start iter number')
-    parser.add_argument('--tf_log', action="store_true", help='If we use tensorboard file')
-    parser.add_argument('--gan_weight', default=1, type=float, help='Gan loss weight')
-    parser.add_argument('--val_num_batches', default=1250, type=int, help='Num of batches will be generated during evalution')
-    parser.add_argument('--val_batch_size', default=4, type=int, help='Batch size during evalution')
-    parser.add_argument('--D_sn', action="store_true", help='If we use spectral norm in D')
-    parser.add_argument('--ttur', action="store_true", help='If we use TTUR during training')
-    parser.add_argument('--eval', action="store_true", help='Only do evaluation')
-    parser.add_argument("--eval_iters", type=int, default=0, help="Iters of evaluation ckpt")
-    parser.add_argument('--eval_gt_path', default='/tmp', type=str, help='Path to ground truth images to evaluate FID score')
-    parser.add_argument('--mlp_ratio', default=4, type=int, help='MLP ratio in swin')
-    parser.add_argument("--lr_mlp", default=0.01, type=float, help='Lr mul for 8 * fc')
-    parser.add_argument("--bcr", action="store_true", help='If we add bcr during training')
-    parser.add_argument("--bcr_fake_lambda", default=10, type=float, help='Bcr weight for fake data')
-    parser.add_argument("--bcr_real_lambda", default=10, type=float, help='Bcr weight for real data')
-    parser.add_argument("--enable_full_resolution", default=8, type=int, help='Enable full resolution attention index')
-    parser.add_argument("--auto_resume", action="store_true", help="Auto resume from checkpoint")
-    parser.add_argument("--lmdb", action="store_true", help='Whether to use lmdb datasets')
-    parser.add_argument("--use_checkpoint", action="store_true", help='Whether to use checkpoint')
-    parser.add_argument("--use_flip", action="store_true", help='Whether to use random flip in training')
-    parser.add_argument("--wandb", action="store_true", help='Whether to use wandb record training')
-    parser.add_argument("--project_name", type=str, default='StyleSwin', help='Project name')
-    parser.add_argument("--lr_decay", action="store_true", help='Whether to use lr decay')
-    parser.add_argument("--lr_decay_start_steps", default=800000, type=int, help='Steps to start lr decay')
+    parser.add_argument('--checkpoint_path', default='/tmp',
+                        type=str, help='Save checkpoints')
+    parser.add_argument('--sample_path', default='/tmp',
+                        type=str, help='Save sample')
+    parser.add_argument('--start_iter', default=0,
+                        type=int, help='Start iter number')
+    parser.add_argument('--tf_log', action="store_true",
+                        help='If we use tensorboard file')
+    parser.add_argument('--gan_weight', default=1,
+                        type=float, help='Gan loss weight')
+    parser.add_argument('--val_num_batches', default=1250, type=int,
+                        help='Num of batches will be generated during evalution')
+    parser.add_argument('--val_batch_size', default=4,
+                        type=int, help='Batch size during evalution')
+    parser.add_argument('--D_sn', action="store_true",
+                        help='If we use spectral norm in D')
+    parser.add_argument('--ttur', action="store_true",
+                        help='If we use TTUR during training')
+    parser.add_argument('--eval', action="store_true",
+                        help='Only do evaluation')
+    parser.add_argument("--eval_iters", type=int, default=0,
+                        help="Iters of evaluation ckpt")
+    parser.add_argument('--eval_gt_path', default='/tmp', type=str,
+                        help='Path to ground truth images to evaluate FID score')
+    parser.add_argument('--mlp_ratio', default=4,
+                        type=int, help='MLP ratio in swin')
+    parser.add_argument("--lr_mlp", default=0.01,
+                        type=float, help='Lr mul for 8 * fc')
+    parser.add_argument("--bcr", action="store_true",
+                        help='If we add bcr during training')
+    parser.add_argument("--bcr_fake_lambda", default=10,
+                        type=float, help='Bcr weight for fake data')
+    parser.add_argument("--bcr_real_lambda", default=10,
+                        type=float, help='Bcr weight for real data')
+    parser.add_argument("--enable_full_resolution", default=8,
+                        type=int, help='Enable full resolution attention index')
+    parser.add_argument("--auto_resume", action="store_true",
+                        help="Auto resume from checkpoint")
+    parser.add_argument("--lmdb", action="store_true",
+                        help='Whether to use lmdb datasets')
+    parser.add_argument("--use_checkpoint", action="store_true",
+                        help='Whether to use checkpoint')
+    parser.add_argument("--use_flip", action="store_true",
+                        help='Whether to use random flip in training')
+    parser.add_argument("--wandb", action="store_true",
+                        help='Whether to use wandb record training')
+    parser.add_argument("--project_name", type=str,
+                        default='StyleSwin', help='Project name')
+    parser.add_argument("--lr_decay", action="store_true",
+                        help='Whether to use lr decay')
+    parser.add_argument("--lr_decay_start_steps", default=800000,
+                        type=int, help='Steps to start lr decay')
 
     args = parser.parse_args()
 
@@ -363,12 +403,13 @@ if __name__ == "__main__":
     args.distributed = n_gpu > 1
 
     args.latent = 4096
-    args.n_mlp = 8 
+    args.n_mlp = 8
     args.g_reg_every = 10000000    # We do not apply regularization on G
 
     if args.distributed:
         torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(backend="nccl", init_method="env://", timeout=timedelta(0, 18000))
+        torch.distributed.init_process_group(
+            backend="nccl", init_method="env://", timeout=timedelta(0, 18000))
         synchronize()
 
     if args.distributed and get_rank() != 0:
@@ -385,7 +426,8 @@ if __name__ == "__main__":
         args.size, args.style_dim, args.n_mlp, channel_multiplier=args.G_channel_multiplier, lr_mlp=args.lr_mlp,
         enable_full_resolution=args.enable_full_resolution, use_checkpoint=args.use_checkpoint
     ).to(device)
-    discriminator = Discriminator(args.size, channel_multiplier=args.D_channel_multiplier, sn=args.D_sn).to(device)
+    discriminator = Discriminator(
+        args.size, channel_multiplier=args.D_channel_multiplier, sn=args.D_sn).to(device)
     g_ema = Generator(
         args.size, args.style_dim, args.n_mlp, channel_multiplier=args.G_channel_multiplier, lr_mlp=args.lr_mlp,
         enable_full_resolution=args.enable_full_resolution, use_checkpoint=args.use_checkpoint
@@ -406,8 +448,8 @@ if __name__ == "__main__":
         except:
             pass
 
-        generator.load_state_dict(ckpt["g"])
-        g_ema.load_state_dict(ckpt["g_ema"])
+        generator.load_state_dict(ckpt["g"], strict=False)
+        g_ema.load_state_dict(ckpt["g_ema"], strict=False)
         try:
             discriminator.load_state_dict(ckpt["d"])
         except:
@@ -434,7 +476,7 @@ if __name__ == "__main__":
             output_device=args.local_rank,
             broadcast_buffers=False,
         )
-    
+
     g_optim = optim.Adam(
         generator.parameters(),
         lr=args.G_lr * g_reg_ratio if not args.ttur else args.D_lr / 4 * g_reg_ratio,
@@ -461,11 +503,13 @@ if __name__ == "__main__":
     if args.eval:
         if get_rank() == 0:
             g_ema.eval()
-            evaluation(g_ema, args, (args.eval_iters * args.batch * int(os.environ["WORLD_SIZE"])))
+            evaluation(g_ema, args, (args.eval_iters *
+                       args.batch * int(os.environ["WORLD_SIZE"])))
             sys.exit(0)
         sys.exit(0)
 
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     if args.use_flip:
         transform = transforms.Compose(
             [
@@ -488,16 +532,18 @@ if __name__ == "__main__":
         dataset = MultiResolutionDataset(args.path, transform, args.size)
     else:
         dataset = datasets.ImageFolder(root=args.path, transform=transform)
-                
+
     loader = data.DataLoader(
         dataset,
         batch_size=args.batch,
         num_workers=args.workers,
-        sampler=data_sampler(dataset, shuffle=True, distributed=args.distributed),
+        sampler=data_sampler(dataset, shuffle=True,
+                             distributed=args.distributed),
         drop_last=True,
     )
 
     if get_rank() == 0 and wandb is not None and args.wandb:
         wandb.init(project=args.project_name)
 
-    train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device)
+    train(args, loader, generator, discriminator,
+          g_optim, d_optim, g_ema, device)

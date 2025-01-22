@@ -3,4 +3,5 @@ __pycache__
 /attention/*
 /points/*
 /features/*
+/imgs/*
 /200lambda_mask_seed512.png
