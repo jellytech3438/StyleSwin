@@ -344,11 +344,11 @@ class DragGAN():
         # if true then this will save attention map under "attention" dir
         # else it will skip
 
-        if visiualize_attention:
+        if visiualize_attention and step % 5 == 0:
             nh = attentions[-1][0].shape[1]  # number of head
             wh = attentions[-1][0].shape[0]
             correction = (1, 2, 0)
-            plt.figure(figsize=(10, 15))
+            # plt.figure(figsize=(10, 15))
 
             for i in range(4):
                 # i = 0, 1 => no mask
@@ -367,10 +367,8 @@ class DragGAN():
                 else:
                     window = "sw-msa"
 
-                attention_pre = attentions[-1][i][:,
-                                                  :1, 0, 0].reshape(nh-1, wh)
-                attention_post = attentions[-1][i][:,
-                                                   1:, 0, 0].reshape(nh-1, wh)
+                attention_pre = attentions[-1][i][:, :1, 0, 0].reshape(nh-1, wh)
+                attention_post = attentions[-1][i][:, 1:, 0, 0].reshape(nh-1, wh)
                 attention_pre = attention_pre.reshape(nh-1, 32, 32)
                 attention_post = attention_post.reshape(nh-1, 32, 32)
                 attention_pre = np.transpose(
@@ -378,13 +376,25 @@ class DragGAN():
                 attention_post = np.transpose(
                     attention_post.detach().cpu().numpy(), correction)
 
-                plt.subplot(4, 2, 2*i+1)
-                plt.title(f"head 1 / latent {latent_num} / {window}")
-                plt.imshow(attention_pre.squeeze())
-                plt.subplot(4, 2, 2*i+2)
-                plt.title(f"head 2 / latent {latent_num} / {window}")
-                plt.imshow(attention_post.squeeze())
-                plt.savefig(f"attention\\{step}.png")
+                # plt.subplot(4, 2, 2*i+1)
+                # plt.title(f"head 1 / latent {latent_num} / {window}")
+                # plt.imshow(attention_pre.squeeze())
+                # plt.subplot(4, 2, 2*i+2)
+                # plt.title(f"head 2 / latent {latent_num} / {window}")
+                # plt.imshow(attention_post.squeeze())
+                # plt.savefig(f"attention\\{step}.png")
+
+                attention_pre = attention_pre * 255
+                attention_pre = attention_pre.astype(np.uint8).squeeze()
+                heat_map_pre = cv2.applyColorMap(attention_pre, cv2.COLORMAP_JET)
+
+                attention_post = attention_post * 255
+                attention_post = attention_post.astype(np.uint8).squeeze()
+                heat_map_post = cv2.applyColorMap(attention_post, cv2.COLORMAP_JET)
+
+                cv2.imwrite(f"attention\\head-1_latent-{latent_num}_{window}_{step}.png", heat_map_pre)
+                cv2.imwrite(f"attention\\head-2_latent-{latent_num}_{window}_{step}.png", heat_map_post)
+
             plt.close()
 
 

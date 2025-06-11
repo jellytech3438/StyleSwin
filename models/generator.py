@@ -342,8 +342,11 @@ class StyleSwinTransformerBlock(nn.Module):
         if mask1 is not None:
             mask1 = mask1.unsqueeze(0).unsqueeze(0)
             mask1 = F.interpolate(mask1, (H, W), mode='bilinear')
+            print("interp shape / ratio", mask1.shape, np.count_nonzero(np.asarray(mask1.cpu()) == 0) / len(mask1), ":", np.count_nonzero(np.asarray(mask1.cpu())) / len(mask1))
+
             mask1 = mask1.squeeze(0).unsqueeze(-1)
             window_mask1 = window_partition(mask1, self.window_size)
+            # print("wp shape / ratio", window_mask1.shape, np.count_nonzero(np.asarray(window_mask1.cpu()) == 0) / len(window_mask1), ":", np.count_nonzero(np.asarray(window_mask1.cpu())) / len(window_mask1))
             window_mask1 = window_mask1.view(-1,
                                              self.window_size * self.window_size)
             attn_mask1 = window_mask1.unsqueeze(1) - window_mask1.unsqueeze(2)

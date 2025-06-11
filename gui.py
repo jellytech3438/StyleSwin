@@ -267,8 +267,8 @@ posy += height + 2
 
 def save_image(sender, app_data):
     global store_image, raw_data, origin_image, image_width, image_height
-    temp = np.array(origin_image) * 255
-    # temp = np.array(store_image) * 255
+    # temp = np.array(origin_image) * 255
+    temp = np.array(store_image) * 255
     # temp = np.array(raw_data) * 255
     im = Image.fromarray(temp.astype(
         np.uint8).reshape((height, width, 4)))

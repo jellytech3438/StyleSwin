@@ -438,7 +438,10 @@ class StyleSwinTransformerBlock(nn.Module):
 
         # mask attention one for restrict view
         if mask1 is not None:
-            mask1 = mask1.unsqueeze(0).unsqueeze(-1)
+            mask1 = mask1.unsqueeze(0).unsqueeze(0)
+            mask1 = F.interpolate(mask1, (H, W), mode='bilinear')
+
+            mask1 = mask1.squeeze(0).unsqueeze(-1)
             window_mask1 = window_partition(mask1, self.window_size)
             window_mask1 = window_mask1.view(-1,
                                              self.window_size * self.window_size)
@@ -446,7 +449,7 @@ class StyleSwinTransformerBlock(nn.Module):
             attn_mask1 = attn_mask1.masked_fill(
                 attn_mask1 != 0, float(-100.0)).masked_fill(attn_mask1 == 0, float(0.0))
             self.attn_mask1 = attn_mask1
-
+            
         x1, attn1 = self.attn[0](
             q1_windows, k1_windows, v1_windows, self.attn_mask1)
         x2, attn2 = self.attn[1](
@@ -553,7 +556,7 @@ class StyleBasicLayer(nn.Module):
         else:
             self.upsample = None
 
-    def forward(self, x, latent1, latent2, return_attn=True, mask1=None):
+    def forward(self, x, latent1, latent2, return_attn=False, mask1=None):
         if self.use_checkpoint:
             x = checkpoint.checkpoint(self.blocks[0], x, latent1)
             x = checkpoint.checkpoint(self.blocks[1], x, latent2)
